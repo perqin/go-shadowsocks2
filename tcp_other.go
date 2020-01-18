@@ -1,6 +1,6 @@
 // +build !linux
 
-package main
+package shadowsocks2
 
 import (
 	"context"
