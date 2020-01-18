@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net"
 	"time"
@@ -9,31 +10,44 @@ import (
 )
 
 // Create a SOCKS server listening on addr and proxy to server.
-func socksLocal(addr, server string, shadow func(net.Conn) net.Conn) {
+func socksLocal(ctx context.Context, addr, server string, shadow func(net.Conn) net.Conn) {
 	logf("SOCKS proxy %s <-> %s", addr, server)
-	tcpLocal(addr, server, shadow, func(c net.Conn) (socks.Addr, error) { return socks.Handshake(c) })
+	tcpLocal(ctx, addr, server, shadow, func(c net.Conn) (socks.Addr, error) { return socks.Handshake(c) })
+	logf("socksLocal done")
 }
 
 // Create a TCP tunnel from addr to target via server.
-func tcpTun(addr, server, target string, shadow func(net.Conn) net.Conn) {
+func tcpTun(ctx context.Context, addr, server, target string, shadow func(net.Conn) net.Conn) {
 	tgt := socks.ParseAddr(target)
 	if tgt == nil {
 		logf("invalid target address %q", target)
 		return
 	}
 	logf("TCP tunnel %s <-> %s <-> %s", addr, server, target)
-	tcpLocal(addr, server, shadow, func(net.Conn) (socks.Addr, error) { return tgt, nil })
+	tcpLocal(ctx, addr, server, shadow, func(net.Conn) (socks.Addr, error) { return tgt, nil })
+	logf("tcpTun done")
 }
 
 // Listen on addr and proxy to server to reach target from getAddr.
-func tcpLocal(addr, server string, shadow func(net.Conn) net.Conn, getAddr func(net.Conn) (socks.Addr, error)) {
+func tcpLocal(ctx context.Context, addr, server string, shadow func(net.Conn) net.Conn, getAddr func(net.Conn) (socks.Addr, error)) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		logf("failed to listen on %s: %v", addr, err)
 		return
 	}
 
+	go func() {
+		<-ctx.Done()
+		l.Close()
+	}()
+
+acceptLoop:
 	for {
+		select {
+		case <-ctx.Done():
+			break acceptLoop
+		default:
+		}
 		c, err := l.Accept()
 		if err != nil {
 			logf("failed to accept: %s", err)
@@ -88,18 +102,30 @@ func tcpLocal(addr, server string, shadow func(net.Conn) net.Conn, getAddr func(
 			}
 		}()
 	}
+	logf("tcpLocal done")
 }
 
 // Listen on addr for incoming connections.
-func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
+func tcpRemote(ctx context.Context, addr string, shadow func(net.Conn) net.Conn) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		logf("failed to listen on %s: %v", addr, err)
 		return
 	}
 
+	go func() {
+		<-ctx.Done()
+		l.Close()
+	}()
+
 	logf("listening TCP on %s", addr)
+acceptLoop:
 	for {
+		select {
+		case <-ctx.Done():
+			break acceptLoop
+		default:
+		}
 		c, err := l.Accept()
 		if err != nil {
 			logf("failed to accept: %v", err)
@@ -135,6 +161,7 @@ func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
 			}
 		}()
 	}
+	logf("tcpRemote done")
 }
 
 // relay copies between left and right bidirectionally. Returns number of

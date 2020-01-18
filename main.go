@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"flag"
@@ -18,29 +19,37 @@ import (
 	"github.com/shadowsocks/go-shadowsocks2/socks"
 )
 
-var config struct {
+type Config struct {
 	Verbose    bool
 	UDPTimeout time.Duration
 }
 
+var config Config
+
+func SetConfig(cfg Config) {
+	config = cfg
+}
+
+type Flags struct {
+	Client     string
+	Server     string
+	Cipher     string
+	Key        string
+	Password   string
+	Keygen     int
+	Socks      string
+	RedirTCP   string
+	RedirTCP6  string
+	TCPTun     string
+	UDPTun     string
+	UDPSocks   bool
+	Plugin     string
+	PluginOpts string
+}
+
 func main() {
 
-	var flags struct {
-		Client     string
-		Server     string
-		Cipher     string
-		Key        string
-		Password   string
-		Keygen     int
-		Socks      string
-		RedirTCP   string
-		RedirTCP6  string
-		TCPTun     string
-		UDPTun     string
-		UDPSocks   bool
-		Plugin     string
-		PluginOpts string
-	}
+	var flags Flags
 
 	flag.BoolVar(&config.Verbose, "verbose", false, "verbose mode")
 	flag.StringVar(&flags.Cipher, "cipher", "AEAD_CHACHA20_POLY1305", "available ciphers: "+strings.Join(core.ListCipher(), " "))
@@ -72,11 +81,25 @@ func main() {
 		return
 	}
 
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	if err := Run(flags, ctx); err != nil {
+		log.Fatal(err)
+	}
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+	killPlugin()
+	cancel()
+}
+
+func Run(flags Flags, ctx context.Context) error {
+
 	var key []byte
 	if flags.Key != "" {
 		k, err := base64.URLEncoding.DecodeString(flags.Key)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 		key = k
 	}
@@ -90,7 +113,7 @@ func main() {
 		if strings.HasPrefix(addr, "ss://") {
 			addr, cipher, password, err = parseURL(addr)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 		}
 
@@ -98,44 +121,44 @@ func main() {
 
 		ciph, err := core.PickCipher(cipher, key, password)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		if flags.Plugin != "" {
 			addr, err = startPlugin(flags.Plugin, flags.PluginOpts, addr, false)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 		}
 
 		if flags.UDPTun != "" {
 			for _, tun := range strings.Split(flags.UDPTun, ",") {
 				p := strings.Split(tun, "=")
-				go udpLocal(p[0], udpAddr, p[1], ciph.PacketConn)
+				go udpLocal(ctx, p[0], udpAddr, p[1], ciph.PacketConn)
 			}
 		}
 
 		if flags.TCPTun != "" {
 			for _, tun := range strings.Split(flags.TCPTun, ",") {
 				p := strings.Split(tun, "=")
-				go tcpTun(p[0], addr, p[1], ciph.StreamConn)
+				go tcpTun(ctx, p[0], addr, p[1], ciph.StreamConn)
 			}
 		}
 
 		if flags.Socks != "" {
 			socks.UDPEnabled = flags.UDPSocks
-			go socksLocal(flags.Socks, addr, ciph.StreamConn)
+			go socksLocal(ctx, flags.Socks, addr, ciph.StreamConn)
 			if flags.UDPSocks {
-				go udpSocksLocal(flags.Socks, udpAddr, ciph.PacketConn)
+				go udpSocksLocal(ctx, flags.Socks, udpAddr, ciph.PacketConn)
 			}
 		}
 
 		if flags.RedirTCP != "" {
-			go redirLocal(flags.RedirTCP, addr, ciph.StreamConn)
+			go redirLocal(ctx, flags.RedirTCP, addr, ciph.StreamConn)
 		}
 
 		if flags.RedirTCP6 != "" {
-			go redir6Local(flags.RedirTCP6, addr, ciph.StreamConn)
+			go redir6Local(ctx, flags.RedirTCP6, addr, ciph.StreamConn)
 		}
 	}
 
@@ -148,7 +171,7 @@ func main() {
 		if strings.HasPrefix(addr, "ss://") {
 			addr, cipher, password, err = parseURL(addr)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 		}
 
@@ -157,23 +180,20 @@ func main() {
 		if flags.Plugin != "" {
 			addr, err = startPlugin(flags.Plugin, flags.PluginOpts, addr, true)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 		}
 
 		ciph, err := core.PickCipher(cipher, key, password)
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
-		go udpRemote(udpAddr, ciph.PacketConn)
-		go tcpRemote(addr, ciph.StreamConn)
+		go udpRemote(ctx, udpAddr, ciph.PacketConn)
+		go tcpRemote(ctx, addr, ciph.StreamConn)
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-	killPlugin()
+	return nil
 }
 
 func parseURL(s string) (addr, cipher, password string, err error) {

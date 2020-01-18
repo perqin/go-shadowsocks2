@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -21,7 +22,7 @@ const (
 const udpBufSize = 64 * 1024
 
 // Listen on laddr for UDP packets, encrypt and send to server to reach target.
-func udpLocal(laddr, server, target string, shadow func(net.PacketConn) net.PacketConn) {
+func udpLocal(ctx context.Context, laddr, server, target string, shadow func(net.PacketConn) net.PacketConn) {
 	srvAddr, err := net.ResolveUDPAddr("udp", server)
 	if err != nil {
 		logf("UDP server address error: %v", err)
@@ -46,8 +47,20 @@ func udpLocal(laddr, server, target string, shadow func(net.PacketConn) net.Pack
 	buf := make([]byte, udpBufSize)
 	copy(buf, tgt)
 
+	go func() {
+		<-ctx.Done()
+		c.Close()
+	}()
+
 	logf("UDP tunnel %s <-> %s <-> %s", laddr, server, target)
+readLoop:
 	for {
+		select {
+		case <-ctx.Done():
+			logf("canceled")
+			break readLoop
+		default:
+		}
 		n, raddr, err := c.ReadFrom(buf[len(tgt):])
 		if err != nil {
 			logf("UDP local read error: %v", err)
@@ -72,10 +85,11 @@ func udpLocal(laddr, server, target string, shadow func(net.PacketConn) net.Pack
 			continue
 		}
 	}
+	logf("udpLocal done")
 }
 
 // Listen on laddr for Socks5 UDP packets, encrypt and send to server to reach target.
-func udpSocksLocal(laddr, server string, shadow func(net.PacketConn) net.PacketConn) {
+func udpSocksLocal(ctx context.Context, laddr, server string, shadow func(net.PacketConn) net.PacketConn) {
 	srvAddr, err := net.ResolveUDPAddr("udp", server)
 	if err != nil {
 		logf("UDP server address error: %v", err)
@@ -92,7 +106,18 @@ func udpSocksLocal(laddr, server string, shadow func(net.PacketConn) net.PacketC
 	nm := newNATmap(config.UDPTimeout)
 	buf := make([]byte, udpBufSize)
 
+	go func() {
+		<-ctx.Done()
+		c.Close()
+	}()
+
+readLoop:
 	for {
+		select {
+		case <-ctx.Done():
+			break readLoop
+		default:
+		}
 		n, raddr, err := c.ReadFrom(buf)
 		if err != nil {
 			logf("UDP local read error: %v", err)
@@ -117,10 +142,11 @@ func udpSocksLocal(laddr, server string, shadow func(net.PacketConn) net.PacketC
 			continue
 		}
 	}
+	logf("udpSocksLocal done")
 }
 
 // Listen on addr for encrypted packets and basically do UDP NAT.
-func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn) {
+func udpRemote(ctx context.Context, addr string, shadow func(net.PacketConn) net.PacketConn) {
 	c, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		logf("UDP remote listen error: %v", err)
@@ -132,8 +158,19 @@ func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn) {
 	nm := newNATmap(config.UDPTimeout)
 	buf := make([]byte, udpBufSize)
 
+	go func() {
+		<-ctx.Done()
+		c.Close()
+	}()
+
 	logf("listening UDP on %s", addr)
+readLoop:
 	for {
+		select {
+		case <-ctx.Done():
+			break readLoop
+		default:
+		}
 		n, raddr, err := c.ReadFrom(buf)
 		if err != nil {
 			logf("UDP remote read error: %v", err)
@@ -171,6 +208,7 @@ func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn) {
 			continue
 		}
 	}
+	logf("udpRemote done")
 }
 
 // Packet NAT table
