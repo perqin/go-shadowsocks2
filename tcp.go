@@ -35,11 +35,7 @@ func tcpLocal(ctx context.Context, addr, server string, shadow func(net.Conn) ne
 		logf("failed to listen on %s: %v", addr, err)
 		return
 	}
-
-	go func() {
-		<-ctx.Done()
-		l.Close()
-	}()
+	closeOnCancel(l, ctx)
 
 acceptLoop:
 	for {
@@ -93,6 +89,8 @@ acceptLoop:
 			}
 
 			logf("proxy %s <-> %s <-> %s", c.RemoteAddr(), server, tgt)
+			closeOnCancel(c, ctx)
+			closeOnCancel(rc, ctx)
 			_, _, err = relay(rc, c)
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
