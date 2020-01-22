@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"flag"
@@ -53,14 +52,13 @@ func main() {
 
 	shadowsocks2.SetConfig(config)
 
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	if err := shadowsocks2.Run(flags, ctx); err != nil {
+	cancel, err := shadowsocks2.Run(flags)
+	if err != nil {
 		log.Fatal(err)
 	}
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
-	shadowsocks2.KillPlugin()
 	cancel()
+	shadowsocks2.KillPlugin()
 }

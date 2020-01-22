@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shadowsocks/go-shadowsocks2/core"
@@ -39,13 +40,15 @@ type Flags struct {
 	PluginOpts string
 }
 
-func Run(flags Flags, ctx context.Context) error {
+func Run(flags Flags) (context.CancelFunc, error) {
+	ctx, cancelFunc := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
 
 	var key []byte
 	if flags.Key != "" {
 		k, err := base64.URLEncoding.DecodeString(flags.Key)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		key = k
 	}
@@ -59,7 +62,7 @@ func Run(flags Flags, ctx context.Context) error {
 		if strings.HasPrefix(addr, "ss://") {
 			addr, cipher, password, err = parseURL(addr)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -67,44 +70,68 @@ func Run(flags Flags, ctx context.Context) error {
 
 		ciph, err := core.PickCipher(cipher, key, password)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		if flags.Plugin != "" {
 			addr, err = startPlugin(flags.Plugin, flags.PluginOpts, addr, false)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
 		if flags.UDPTun != "" {
 			for _, tun := range strings.Split(flags.UDPTun, ",") {
 				p := strings.Split(tun, "=")
-				go udpLocal(ctx, p[0], udpAddr, p[1], ciph.PacketConn)
+				wg.Add(1)
+				go func() {
+					udpLocal(ctx, p[0], udpAddr, p[1], ciph.PacketConn)
+					wg.Done()
+				}()
 			}
 		}
 
 		if flags.TCPTun != "" {
 			for _, tun := range strings.Split(flags.TCPTun, ",") {
 				p := strings.Split(tun, "=")
-				go tcpTun(ctx, p[0], addr, p[1], ciph.StreamConn)
+				wg.Add(1)
+				go func() {
+					tcpTun(ctx, p[0], addr, p[1], ciph.StreamConn)
+					wg.Done()
+				}()
 			}
 		}
 
 		if flags.Socks != "" {
 			socks.UDPEnabled = flags.UDPSocks
-			go socksLocal(ctx, flags.Socks, addr, ciph.StreamConn)
+			wg.Add(1)
+			go func() {
+				socksLocal(ctx, flags.Socks, addr, ciph.StreamConn)
+				wg.Done()
+			}()
 			if flags.UDPSocks {
-				go udpSocksLocal(ctx, flags.Socks, udpAddr, ciph.PacketConn)
+				wg.Add(1)
+				go func() {
+					udpSocksLocal(ctx, flags.Socks, udpAddr, ciph.PacketConn)
+					wg.Done()
+				}()
 			}
 		}
 
 		if flags.RedirTCP != "" {
-			go redirLocal(ctx, flags.RedirTCP, addr, ciph.StreamConn)
+			wg.Add(1)
+			go func() {
+				redirLocal(ctx, flags.RedirTCP, addr, ciph.StreamConn)
+				wg.Done()
+			}()
 		}
 
 		if flags.RedirTCP6 != "" {
-			go redir6Local(ctx, flags.RedirTCP6, addr, ciph.StreamConn)
+			wg.Add(1)
+			go func() {
+				redir6Local(ctx, flags.RedirTCP6, addr, ciph.StreamConn)
+				wg.Done()
+			}()
 		}
 	}
 
@@ -117,7 +144,7 @@ func Run(flags Flags, ctx context.Context) error {
 		if strings.HasPrefix(addr, "ss://") {
 			addr, cipher, password, err = parseURL(addr)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
@@ -126,20 +153,31 @@ func Run(flags Flags, ctx context.Context) error {
 		if flags.Plugin != "" {
 			addr, err = startPlugin(flags.Plugin, flags.PluginOpts, addr, true)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 
 		ciph, err := core.PickCipher(cipher, key, password)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		go udpRemote(ctx, udpAddr, ciph.PacketConn)
-		go tcpRemote(ctx, addr, ciph.StreamConn)
+		wg.Add(1)
+		go func() {
+			udpRemote(ctx, udpAddr, ciph.PacketConn)
+			wg.Done()
+		}()
+		wg.Add(1)
+		go func() {
+			tcpRemote(ctx, addr, ciph.StreamConn)
+			wg.Done()
+		}()
 	}
 
-	return nil
+	return func() {
+		cancelFunc()
+		wg.Wait()
+	}, nil
 }
 
 func parseURL(s string) (addr, cipher, password string, err error) {
