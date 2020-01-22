@@ -1,4 +1,4 @@
-package main
+package shadowsocks2
 
 import (
 	"fmt"
@@ -36,7 +36,7 @@ func startPlugin(plugin, pluginOpts, ssAddr string, isServer bool) (newAddr stri
 	return
 }
 
-func killPlugin() {
+func KillPlugin() {
 	if pluginCmd != nil {
 		pluginCmd.Process.Signal(syscall.SIGTERM)
 		waitCh := make(chan struct{})

@@ -1,6 +1,6 @@
 // +build linux,!386
 
-package main
+package shadowsocks2
 
 import "syscall"
 
