@@ -51,6 +51,7 @@ acceptLoop:
 		}
 
 		go func() {
+			closeOnCancel(c, ctx)
 			defer c.Close()
 			c.(*net.TCPConn).SetKeepAlive(true)
 			tgt, err := getAddr(c)
@@ -79,6 +80,7 @@ acceptLoop:
 				logf("failed to connect to server %v: %v", server, err)
 				return
 			}
+			closeOnCancel(rc, ctx)
 			defer rc.Close()
 			rc.(*net.TCPConn).SetKeepAlive(true)
 			rc = shadow(rc)
@@ -89,8 +91,6 @@ acceptLoop:
 			}
 
 			logf("proxy %s <-> %s <-> %s", c.RemoteAddr(), server, tgt)
-			closeOnCancel(c, ctx)
-			closeOnCancel(rc, ctx)
 			_, _, err = relay(rc, c)
 			if err != nil {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
@@ -110,11 +110,7 @@ func tcpRemote(ctx context.Context, addr string, shadow func(net.Conn) net.Conn)
 		logf("failed to listen on %s: %v", addr, err)
 		return
 	}
-
-	go func() {
-		<-ctx.Done()
-		l.Close()
-	}()
+	closeOnCancel(l, ctx)
 
 	logf("listening TCP on %s", addr)
 acceptLoop:
@@ -131,6 +127,7 @@ acceptLoop:
 		}
 
 		go func() {
+			closeOnCancel(c, ctx)
 			defer c.Close()
 			c.(*net.TCPConn).SetKeepAlive(true)
 			c = shadow(c)
@@ -146,6 +143,7 @@ acceptLoop:
 				logf("failed to connect to target: %v", err)
 				return
 			}
+			closeOnCancel(rc, ctx)
 			defer rc.Close()
 			rc.(*net.TCPConn).SetKeepAlive(true)
 
