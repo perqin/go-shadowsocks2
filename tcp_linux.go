@@ -1,6 +1,7 @@
 package shadowsocks2
 
 import (
+	"context"
 	"errors"
 	"net"
 	"syscall"
